@@ -1,1 +1,1 @@
-A collection of end-to-end data analytics projects showcasing Python, Matplotlib, Seaborn, Plotly, as well as the use of statistics, data extraction techniques, and prediction models in order to identify trends and patterns in large sets of data. 
+A collection of end-to-end data analytics projects showcasing Python, Matplotlib, Seaborn, Plotly, as well as the use of statistics, data extraction techniques, and prediction models in order to identify trends and patterns in large sets of data.
