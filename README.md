@@ -1,1 +1,1 @@
-A collection of end-to-end data analytics projects showcasing Python, Matplotlib, Seaborn, Plotly, as well as the use of statistics, data extraction techniques, and prediction models in order to identify trends and patterns in large sets of data.
+A collection of website scrapers written to collect data from over 20 different websites, as well as detailed cleaning and analyses of these large datasets.
