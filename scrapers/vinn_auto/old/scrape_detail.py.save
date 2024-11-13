@@ -1,0 +1,157 @@
+
+
+import json
+import logging
+import math
+import multiprocessing
+import pandas as pd
+import random
+import requests
+import time
+
+from base import log_config, retry_decorator
+from base.db_connection import connect_database
+from base.logging_decorator import handle_exceptions
+
+logger_name = 'vinn_auto_scraper_bots_canada'
+email_subject = 'Vinn Auto Bot Alert'
+email_toaddrs = ['summit@qodemedia.com', 'prabin@qodemedia.net']
+logger = logging.getLogger(__name__)
+
+
+class VehicleScrapper:
+
+    def __init__(self):
+        self.db_connection, self.cursor = connect_database()
+    
+    @retry_decorator.retry(requests.exceptions.ConnectionError, tries=3, delay=120)
+    def insert_new_vehicle(self, vehicle_data, url_id, vehicle_id, db_conn, db_conn_cursor):
+        try:
+            sql = "SELECT * FROM vinn_auto_vehicle WHERE vehicle_id = %s"
+            self.cursor.execute(sql, (vehicle_id,))
+            if self.cursor.fetchone() is not None:
+                return
+            sql = """INSERT INTO vinn_auto_vehicle(url_id,
+                                                vehicle_id,
+                                                year,
+                                                make,
+                                                model,
+                                                price,
+                                                kilometers,
+                                                condition,
+                                                trim,
+                                                transmission,
+                                                is_available,
+                                                vin,
+                                                body_type,
+                                                province,
+                                                drive_train,
+                                                exterior_color,
+                                                fuel_type,
+                                                images,
+                                                scraped_at                                                
+                                                )
+                    VALUES(%%s, %%s, %%s, %%s, %%s, %s%, %%s, %%s, %%s, %%s, %%s, %%s, %%s, %%s, %%s, %%s, %%s, %%s, %%s)"""
+
+            db_conn_cursor.execute(sql, vehicle_data)
+            # self.db_connection.commit()
+            self.update_url_table(url_id, db_conn_cursor)
+            db_conn.commit()
+        except Exception as e:
+            logger.error(f"Error while inserting data to Vehicle Detail table {e}")
+            db_conn.rollback()
+            raise
+
+    def update_url_table(self, url_id, db_conn_cursor):
+        sql_update_query = """Update vinn_auto_url set is_created = %s where id = %s"""
+        db_conn_cursor.execute(sql_update_query, (True, url_id))
+
+    def get_new_urls(self):
+        try:
+            sql = "SELECT id, vehicle_id, url FROM vinn_auto_url WHERE is_created = %s"
+            self.cursor.execute(sql, (False,))
+            all_urls = self.cursor.fetchall()
+            return all_urls
+        except Exception as e:
+            logger.error(f"Error while checking url exist in DB {e}")
+            raise
+
+    @retry_decorator.retry(requests.exceptions.ConnectionError, tries=3, delay=120)
+    def fetch_vehicle_data(self, total_processor, index, total_vehicle_urls):
+        try:
+            db_conn, db_conn_cursor = connect_database()
+            total_vehicle_urls_count = len(total_vehicle_urls)
+            processor_page_list = math.floor(total_vehicle_urls_count / total_processor)
+            start_number = index * processor_page_list
+            end_number = start_number + processor_page_list
+            if index + 1 == total_processor:
+                end_number = total_vehicle_urls_count
+
+            for i in range(start_number, end_number):
+                url_id = total_vehicle_urls[i][0]
+                vehicle_id = total_vehicle_urls[i][1]
+                res = requests.get(f"https://www.vinnauto.com/api/inventory/{vehicle_id}").json()
+                photos = {}
+                if res['photo_count'] > 0:
+                    photos_df = pd.DataFrame(res['photos'])
+                    photos = photos_df['original_url'].to_dict()
+
+                vehicle_data = (url_id,
+                                vehicle_id,
+                                res['year'],
+                                res['make'],
+                                res['model'],
+                                res['price'],
+                                res['kilometers'],
+                                res['status'],
+                                res['trim'],
+                                res['transmission'],
+                                res['available'],
+                                res['vin'],
+                                res['body_type'],
+                                res['dealership']['address']['province'],
+                                res['drive_type'],
+                                res['exterior_colour'],
+                                res['fuel_type'],
+                                json.dumps(photos),
+                                res['scraped_at'],
+                                )
+                self.insert_new_vehicle(vehicle_data, url_id, vehicle_id, db_conn, db_conn_cursor)
+                time.sleep(random.randrange(2, 10))
+        except Exception as e:
+            logger.error(f'Error while fetching Vehicle Data: {e}')
+            raise
+
+    def index(self):
+        try:
+            total_vehicle_urls = self.get_new_urls()
+            total_vehicle_urls_count = len(total_vehicle_urls)
+            total_processor = multiprocessing.cpu_count()
+
+            if total_processor > 2:
+                total_processor -= 1
+
+            if total_vehicle_urls_count < total_processor:
+                total_processor = total_vehicle_urls_count
+
+            for i in range(total_processor):
+                vars()[f"process_{i}"] = multiprocessing.Process(target=self.fetch_vehicle_data,
+                                                                 args=(total_processor, i, total_vehicle_urls))
+
+            for i in range(total_processor):
+                vars()[f"process_{i}"].start()
+
+            for i in range(total_processor):
+                vars()[f"process_{i}"].join()
+
+            print("All processes finished execution!")
+
+        except Exception as e:
+            logger.error(f'Error while fetching URL: {e}')
+            raise
+
+
+@handle_exceptions(logger_name, email_subject, email_toaddrs)
+def main():
+    vehicle_scraper = VehicleScrapper()
+    vehicle_scraper.index()
